@@ -343,7 +343,12 @@ class SQLAlchemySource(Source):
         schema: str,
         sql_config: SQLAlchemyConfig,
     ) -> Iterable[SqlWorkUnit]:
-        for table in inspector.get_table_names(schema):
+        all_tables = []
+        if hasattr(inspector, "get_foreign_table_names"):
+            all_tables = inspector.get_table_names(schema) + inspector.get_foreign_table_names(schema)
+        else:
+            all_tables = inspector.get_table_names(schema)
+        for table in all_tables:
             schema, table = self.standardize_schema_table_names(
                 schema=schema, entity=table
             )
