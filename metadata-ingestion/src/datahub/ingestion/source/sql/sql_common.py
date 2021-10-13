@@ -381,7 +381,7 @@ class SQLAlchemySource(Source):
         schema: str,
         sql_config: SQLAlchemyConfig,
     ) -> Iterable[SqlWorkUnit]:
-        all_tables = []
+        all_tables = [] 
         if hasattr(inspector, "get_foreign_table_names"):
             all_tables = inspector.get_table_names(schema) + inspector.get_foreign_table_names(schema)
         else:
