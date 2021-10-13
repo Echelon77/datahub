@@ -1,5 +1,6 @@
 package com.linkedin.metadata.resources.entity;
 
+import com.codahale.metrics.MetricRegistry;
 import com.linkedin.aspect.GetTimeseriesAspectValuesResponse;
 import com.linkedin.common.AuditStamp;
 import com.linkedin.common.urn.Urn;
@@ -9,16 +10,14 @@ import com.linkedin.metadata.Constants;
 import com.linkedin.metadata.aspect.EnvelopedAspectArray;
 import com.linkedin.metadata.aspect.VersionedAspect;
 import com.linkedin.metadata.entity.EntityService;
-import com.linkedin.metadata.models.AspectSpec;
-import com.linkedin.metadata.utils.EntityKeyUtils;
-import com.linkedin.metadata.models.EntitySpec;
-import com.linkedin.metadata.restli.RestliUtils;
-import com.linkedin.metadata.search.utils.BrowsePathUtils;
+import com.linkedin.metadata.restli.RestliUtil;
 import com.linkedin.metadata.timeseries.TimeseriesAspectService;
+import com.linkedin.metadata.utils.EntityKeyUtils;
 import com.linkedin.metadata.utils.GenericAspectUtils;
 import com.linkedin.mxe.GenericAspect;
 import com.linkedin.mxe.MetadataChangeProposal;
 import com.linkedin.parseq.Task;
+import com.linkedin.restli.internal.server.methods.AnyRecord;
 import com.linkedin.restli.server.annotations.Action;
 import com.linkedin.restli.server.annotations.ActionParam;
 import com.linkedin.restli.server.annotations.Optional;
@@ -26,20 +25,23 @@ import com.linkedin.restli.server.annotations.QueryParam;
 import com.linkedin.restli.server.annotations.RestLiCollection;
 import com.linkedin.restli.server.annotations.RestMethod;
 import com.linkedin.restli.server.resources.CollectionResourceTaskTemplate;
+import io.opentelemetry.extension.annotations.WithSpan;
 import java.net.URISyntaxException;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import lombok.extern.slf4j.Slf4j;
 
-import static com.linkedin.metadata.Constants.*;
-import static com.linkedin.metadata.resources.ResourceUtils.*;
-import static com.linkedin.metadata.restli.RestliConstants.*;
+import static com.linkedin.metadata.restli.RestliConstants.PARAM_LIMIT;
+import static com.linkedin.metadata.restli.RestliConstants.PARAM_URN;
+
 
 /**
  * Single unified resource for fetching, updating, searching, & browsing DataHub entities
@@ -73,25 +75,23 @@ public class AspectResource extends CollectionResourceTaskTemplate<String, Versi
    */
   @RestMethod.Get
   @Nonnull
-  public Task<VersionedAspect> get(
-      @Nonnull String urnStr,
-      @QueryParam("aspect") @Optional @Nullable String aspectName,
+  @WithSpan
+  public Task<AnyRecord> get(@Nonnull String urnStr, @QueryParam("aspect") @Optional @Nullable String aspectName,
       @QueryParam("version") @Optional @Nullable Long version) throws URISyntaxException {
     log.info("GET ASPECT urn: {} aspect: {} version: {}", urnStr, aspectName, version);
     final Urn urn = Urn.createFromString(urnStr);
-    return RestliUtils.toTask(() -> {
+    return RestliUtil.toTask(() -> {
       final VersionedAspect aspect = _entityService.getVersionedAspect(urn, aspectName, version);
       if (aspect == null) {
-        throw RestliUtils.resourceNotFoundException();
-      } else {
-        validateOrWarn(aspect);
+        throw RestliUtil.resourceNotFoundException();
       }
-      return aspect;
-    });
+      return new AnyRecord(aspect.data());
+    }, MetricRegistry.name(this.getClass(), "get"));
   }
 
   @Action(name = ACTION_GET_TIMESERIES_ASPECT)
   @Nonnull
+  @WithSpan
   public Task<GetTimeseriesAspectValuesResponse> getTimeseriesAspectValues(
       @ActionParam(PARAM_URN) @Nonnull String urnStr, @ActionParam(PARAM_ENTITY) @Nonnull String entityName,
       @ActionParam(PARAM_ASPECT) @Nonnull String aspectName,
@@ -102,7 +102,7 @@ public class AspectResource extends CollectionResourceTaskTemplate<String, Versi
         "Get Timeseries Aspect values for aspect {} for entity {} with startTimeMillis {}, endTimeMillis {} and limit {}.",
         aspectName, entityName, startTimeMillis, endTimeMillis, limit);
     final Urn urn = Urn.createFromString(urnStr);
-    return RestliUtils.toTask(() -> {
+    return RestliUtil.toTask(() -> {
       GetTimeseriesAspectValuesResponse response = new GetTimeseriesAspectValuesResponse();
       response.setEntityName(entityName);
       response.setAspectName(aspectName);
@@ -113,33 +113,35 @@ public class AspectResource extends CollectionResourceTaskTemplate<String, Versi
         response.setEndTimeMillis(endTimeMillis);
       }
       response.setLimit(limit);
-      response.setValues(
-          new EnvelopedAspectArray(_timeseriesAspectService.getAspectValues(urn, entityName, aspectName, startTimeMillis, endTimeMillis, limit)));
+      response.setValues(new EnvelopedAspectArray(
+          _timeseriesAspectService.getAspectValues(urn, entityName, aspectName, startTimeMillis, endTimeMillis,
+              limit)));
       return response;
-    });
+    }, MetricRegistry.name(this.getClass(), "getTimeseriesAspectValues"));
   }
 
   @Action(name = ACTION_INGEST_PROPOSAL)
   @Nonnull
-  public Task<String> ingestProposal(@ActionParam(PARAM_PROPOSAL) @Nonnull MetadataChangeProposal metadataChangeProposal)
-      throws URISyntaxException {
+  @WithSpan
+  public Task<String> ingestProposal(
+      @ActionParam(PARAM_PROPOSAL) @Nonnull MetadataChangeProposal metadataChangeProposal) throws URISyntaxException {
+
     log.info("INGEST PROPOSAL proposal: {}", metadataChangeProposal);
 
     // TODO: Use the actor present in the IC.
-    final AuditStamp auditStamp = new AuditStamp().setTime(_clock.millis()).setActor(Urn.createFromString(
-        Constants.UNKNOWN_ACTOR));
+    final AuditStamp auditStamp =
+        new AuditStamp().setTime(_clock.millis()).setActor(Urn.createFromString(Constants.UNKNOWN_ACTOR));
     final List<MetadataChangeProposal> additionalChanges = getAdditionalChanges(metadataChangeProposal);
 
-    return RestliUtils.toTask(() -> {
+    return RestliUtil.toTask(() -> {
       log.debug("Proposal: {}", metadataChangeProposal);
       Urn urn = _entityService.ingestProposal(metadataChangeProposal, auditStamp);
       additionalChanges.forEach(proposal -> _entityService.ingestProposal(proposal, auditStamp));
       return urn.toString();
-    });
+    }, MetricRegistry.name(this.getClass(), "ingestProposal"));
   }
 
-  private List<MetadataChangeProposal> getAdditionalChanges(@Nonnull MetadataChangeProposal metadataChangeProposal)
-      throws URISyntaxException {
+  private List<MetadataChangeProposal> getAdditionalChanges(@Nonnull MetadataChangeProposal metadataChangeProposal) {
     // No additional changes for delete operation
     if (metadataChangeProposal.getChangeType() == ChangeType.DELETE) {
       return Collections.emptyList();
@@ -147,62 +149,27 @@ public class AspectResource extends CollectionResourceTaskTemplate<String, Versi
 
     final List<MetadataChangeProposal> additionalChanges = new ArrayList<>();
 
-    final Urn urn = EntityKeyUtils.getUrnFromProposal(
-        metadataChangeProposal,
+    final Urn urn = EntityKeyUtils.getUrnFromProposal(metadataChangeProposal,
         _entityService.getKeyAspectSpec(metadataChangeProposal.getEntityType()));
 
-    // TODO: Run these in parallel.
-
-    // Insert Key Aspect
-    final MetadataChangeProposal maybeKeyAspectProposal = getKeyAspectProposal(urn, metadataChangeProposal);
-    if (maybeKeyAspectProposal != null) {
-      additionalChanges.add(maybeKeyAspectProposal);
-    }
-
-    // Insert Browse Paths Aspect
-    final MetadataChangeProposal maybeBrowsePathsProposal = getBrowsePathsProposal(urn, metadataChangeProposal);
-    if (maybeBrowsePathsProposal != null) {
-      additionalChanges.add(maybeBrowsePathsProposal);
-    }
-
-    return additionalChanges;
+    return _entityService.getDefaultAspectsFromUrn(urn)
+        .entrySet()
+        .stream()
+        .map(entry -> getProposalFromAspect(entry.getKey(), entry.getValue(), metadataChangeProposal))
+        .filter(Objects::nonNull)
+        .collect(Collectors.toList());
   }
 
-  private MetadataChangeProposal getKeyAspectProposal(Urn urn, MetadataChangeProposal original) {
-    final AspectSpec keyAspectSpec = _entityService.getKeyAspectSpec(urn);
-    final RecordTemplate keyAspect = _entityService.getAspect(urn, keyAspectSpec.getName(), ASPECT_LATEST_VERSION);
-    if (keyAspect == null) {
-      try {
-        MetadataChangeProposal keyAspectProposal = original.copy();
-        GenericAspect aspect = GenericAspectUtils.serializeAspect(
-            EntityKeyUtils.convertUrnToEntityKey(urn, keyAspectSpec.getPegasusSchema()));
-        keyAspectProposal.setAspect(aspect);
-        keyAspectProposal.setAspectName(keyAspectSpec.getName());
-        return keyAspectProposal;
-      } catch (CloneNotSupportedException e) {
-        log.error("Issue while generating additional proposals corresponding to the input proposal", e);
-      }
-    }
-    return null;
-  }
-
-  private MetadataChangeProposal getBrowsePathsProposal(Urn urn, MetadataChangeProposal original) throws URISyntaxException {
-    final String browsePathsAspectName = "browsePaths";
-    final EntitySpec entitySpec = _entityService.getEntityRegistry().getEntitySpec(urn.getEntityType());
-    if (entitySpec.hasAspect(browsePathsAspectName)) {
-      final RecordTemplate browsePathAspect =
-          _entityService.getAspect(urn, browsePathsAspectName, ASPECT_LATEST_VERSION);
-      if (browsePathAspect == null) {
-        try {
-          MetadataChangeProposal browsePathProposal = original.copy();
-          GenericAspect aspect = GenericAspectUtils.serializeAspect(BrowsePathUtils.buildBrowsePath(urn));
-          browsePathProposal.setAspect(aspect);
-          browsePathProposal.setAspectName(browsePathsAspectName);
-          return browsePathProposal;
-        } catch (CloneNotSupportedException e) {
-          log.error("Issue while generating additional proposals corresponding to the input proposal", e);
-        }
-      }
+  private MetadataChangeProposal getProposalFromAspect(String aspectName, RecordTemplate aspect,
+      MetadataChangeProposal original) {
+    try {
+      MetadataChangeProposal proposal = original.copy();
+      GenericAspect genericAspect = GenericAspectUtils.serializeAspect(aspect);
+      proposal.setAspect(genericAspect);
+      proposal.setAspectName(aspectName);
+      return proposal;
+    } catch (CloneNotSupportedException e) {
+      log.error("Issue while generating additional proposals corresponding to the input proposal", e);
     }
     return null;
   }

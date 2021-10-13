@@ -8,7 +8,7 @@ import { useGetAuthenticatedUser } from '../useGetAuthenticatedUser';
 import { useEntityRegistry } from '../useEntityRegistry';
 import { navigateToSearchUrl } from '../search/utils/navigateToSearchUrl';
 import { SearchBar } from '../search/SearchBar';
-import { GetSearchResultsQuery, useGetAutoCompleteAllResultsLazyQuery } from '../../graphql/search.generated';
+import { GetSearchResultsQuery, useGetAutoCompleteMultipleResultsLazyQuery } from '../../graphql/search.generated';
 import { useGetAllEntitySearchResults } from '../../utils/customGraphQL/useGetAllEntitySearchResults';
 import { EntityType } from '../../types.generated';
 import analytics, { EventType } from '../analytics';
@@ -31,6 +31,7 @@ const WelcomeText = styled(Typography.Text)`
 
 const SubHeaderText = styled(Typography.Text)`
     font-size: 20px;
+    font-weight: 500;
     color: ${(props) =>
         props.theme.styles['homepage-text-color'] || props.theme.styles['homepage-background-lower-fade']};
 `;
@@ -137,8 +138,8 @@ function sortRandom() {
 export const HomePageHeader = () => {
     const history = useHistory();
     const entityRegistry = useEntityRegistry();
+    const [getAutoCompleteResultsForMultiple, { data: suggestionsData }] = useGetAutoCompleteMultipleResultsLazyQuery();
     const user = useGetAuthenticatedUser()?.corpUser;
-    const [getAutoCompleteResultsForAll, { data: suggestionsData }] = useGetAutoCompleteAllResultsLazyQuery();
     const themeConfig = useTheme();
 
     const onSearch = (query: string, type?: EntityType) => {
@@ -155,13 +156,12 @@ export const HomePageHeader = () => {
             type,
             query,
             history,
-            entityRegistry,
         });
     };
 
     const onAutoComplete = (query: string) => {
-        if (query && query !== '') {
-            getAutoCompleteResultsForAll({
+        if (query && query.trim() !== '') {
+            getAutoCompleteResultsForMultiple({
                 variables: {
                     input: {
                         query,
@@ -187,6 +187,10 @@ export const HomePageHeader = () => {
     const suggestionsToShow = useMemo(() => {
         let result: string[] = [];
         if (!suggestionsLoading) {
+            // TODO: Make this more dynamic.
+            // Add a ticket.
+            // Colored Tags: Feature Request...
+            // ...
             [EntityType.Dashboard, EntityType.Chart, EntityType.Dataset].forEach((type) => {
                 const suggestionsToShowForEntity = getSuggestionFieldsFromResult(
                     allSearchResultsByType[type]?.data,
@@ -228,7 +232,7 @@ export const HomePageHeader = () => {
                 <SearchBarContainer>
                     <SearchBar
                         placeholderText={themeConfig.content.search.searchbarMessage}
-                        suggestions={suggestionsData?.autoCompleteForAll?.suggestions || []}
+                        suggestions={suggestionsData?.autoCompleteForMultiple?.suggestions || []}
                         onSearch={onSearch}
                         onQueryChange={onAutoComplete}
                         autoCompleteStyle={styles.searchBox}
@@ -258,7 +262,6 @@ export const HomePageHeader = () => {
                                                     type: undefined,
                                                     query: suggestion,
                                                     history,
-                                                    entityRegistry,
                                                 })
                                             }
                                         >

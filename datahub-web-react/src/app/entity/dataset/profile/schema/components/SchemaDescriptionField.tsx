@@ -1,4 +1,4 @@
-import { Typography, message, Tag } from 'antd';
+import { Typography, message, Button } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import React, { useState } from 'react';
 import styled from 'styled-components';
@@ -14,9 +14,10 @@ const EditIcon = styled(EditOutlined)`
     display: none;
 `;
 
-const AddNewDescription = styled(Tag)`
-    cursor: pointer;
+const AddNewDescription = styled(Button)`
     display: none;
+    margin: -4px;
+    width: 140px;
 `;
 
 const ExpandedActions = styled.div`
@@ -96,14 +97,14 @@ export default function DescriptionField({
     const onCloseModal = () => setShowAddModal(false);
 
     const onUpdateModal = async (desc: string | null) => {
-        // message.loading({ content: 'Updating...' });
+        message.loading({ content: 'Updating...' });
         try {
             await onUpdate(desc || '');
-            // message.destroy();
-            // message.success({ content: 'Updated!', duration: 2 });
-        } catch (e) {
             message.destroy();
-            message.error({ content: `Update Failed! \n ${e.message || ''}`, duration: 2 });
+            message.success({ content: 'Updated!', duration: 2 });
+        } catch (e: unknown) {
+            message.destroy();
+            if (e instanceof Error) message.error({ content: `Update Failed! \n ${e.message || ''}`, duration: 2 });
         }
         onCloseModal();
     };
@@ -111,6 +112,8 @@ export default function DescriptionField({
     const EditButton =
         (editable && description && <EditIcon twoToneColor="#52c41a" onClick={() => setShowAddModal(true)} />) ||
         undefined;
+
+    const showAddDescription = editable && !description;
 
     return (
         <DescriptionContainer
@@ -121,19 +124,21 @@ export default function DescriptionField({
         >
             {expanded ? (
                 <>
-                    <DescriptionText source={description} />
-                    <ExpandedActions>
-                        {overLimit && (
-                            <ReadLessText
-                                onClick={() => {
-                                    setExpanded(false);
-                                }}
-                            >
-                                Read Less
-                            </ReadLessText>
-                        )}
-                        {EditButton}
-                    </ExpandedActions>
+                    {!!description && <DescriptionText source={description} />}
+                    {!!description && (
+                        <ExpandedActions>
+                            {overLimit && (
+                                <ReadLessText
+                                    onClick={() => {
+                                        setExpanded(false);
+                                    }}
+                                >
+                                    Read Less
+                                </ReadLessText>
+                            )}
+                            {EditButton}
+                        </ExpandedActions>
+                    )}
                 </>
             ) : (
                 <>
@@ -169,8 +174,8 @@ export default function DescriptionField({
                     />
                 </div>
             )}
-            {editable && !description && (
-                <AddNewDescription color="success" onClick={() => setShowAddModal(true)}>
+            {showAddDescription && (
+                <AddNewDescription type="text" onClick={() => setShowAddModal(true)}>
                     + Add Description
                 </AddNewDescription>
             )}
